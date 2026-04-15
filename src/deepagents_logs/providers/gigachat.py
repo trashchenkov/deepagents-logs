@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Iterator
 from functools import cached_property
 from typing import Any
@@ -38,6 +39,9 @@ class LoggedGigaChatSDK(ProviderLoggingMixin, gigachat.GigaChat):
             model_name=self._settings.model,
         )
 
+    async def _alog_pair(self, req_kwargs: dict[str, Any], response_body: Any, *, status: int | str | None = 200) -> None:
+        await asyncio.to_thread(self._log_pair, req_kwargs, response_body, status=status)
+
     def _extract_prompts(self, chat_data: Any) -> None:
         session_id = self._ensure_session_id()
         if not session_id:
@@ -52,6 +56,9 @@ class LoggedGigaChatSDK(ProviderLoggingMixin, gigachat.GigaChat):
                 prompts.append(content.strip())
         if prompts:
             self._session_logger.append_prompt(session_id, prompts, timestamp=self._session_logger.ensure_state(session_id, self._current_cwd()).started_at, cwd=self._current_cwd())
+
+    async def _aextract_prompts(self, chat_data: Any) -> None:
+        await asyncio.to_thread(self._extract_prompts, chat_data)
 
     def _update_token(self) -> None:
         needs_refresh = not self._is_token_usable() and (
@@ -96,9 +103,9 @@ class LoggedGigaChatSDK(ProviderLoggingMixin, gigachat.GigaChat):
             )
         try:
             await super()._aupdate_token()
-            self._log_pair(req_kwargs, self._access_token, status=200)
+            await self._alog_pair(req_kwargs, self._access_token, status=200)
         except Exception as exc:
-            self._log_pair(req_kwargs, {"error": str(exc), "type": type(exc).__name__}, status="error")
+            await self._alog_pair(req_kwargs, {"error": str(exc), "type": type(exc).__name__}, status="error")
             raise
 
     def get_models(self):
@@ -115,10 +122,10 @@ class LoggedGigaChatSDK(ProviderLoggingMixin, gigachat.GigaChat):
         req_kwargs = models_api._get_models_kwargs(access_token=self.token)
         try:
             response = await super().aget_models()
-            self._log_pair(req_kwargs, response)
+            await self._alog_pair(req_kwargs, response)
             return response
         except Exception as exc:
-            self._log_pair(req_kwargs, {"error": str(exc), "type": type(exc).__name__}, status="error")
+            await self._alog_pair(req_kwargs, {"error": str(exc), "type": type(exc).__name__}, status="error")
             raise
 
     def tokens_count(self, input_: list[str], model: str | None = None):
@@ -137,10 +144,10 @@ class LoggedGigaChatSDK(ProviderLoggingMixin, gigachat.GigaChat):
         req_kwargs = tools_api._get_tokens_count_kwargs(input_=input_, model=effective_model, access_token=self.token)
         try:
             response = await super().atokens_count(input_, model=model)
-            self._log_pair(req_kwargs, response)
+            await self._alog_pair(req_kwargs, response)
             return response
         except Exception as exc:
-            self._log_pair(req_kwargs, {"error": str(exc), "type": type(exc).__name__}, status="error")
+            await self._alog_pair(req_kwargs, {"error": str(exc), "type": type(exc).__name__}, status="error")
             raise
 
     def chat(self, payload):
@@ -157,14 +164,14 @@ class LoggedGigaChatSDK(ProviderLoggingMixin, gigachat.GigaChat):
 
     async def achat(self, payload):
         chat_data = _parse_chat(payload, self._settings)
-        self._extract_prompts(chat_data)
+        await self._aextract_prompts(chat_data)
         req_kwargs = chat_api._get_chat_kwargs(chat=chat_data, access_token=self.token)
         try:
             response = await super().achat(payload)
-            self._log_pair(req_kwargs, response)
+            await self._alog_pair(req_kwargs, response)
             return response
         except Exception as exc:
-            self._log_pair(req_kwargs, {"error": str(exc), "type": type(exc).__name__}, status="error")
+            await self._alog_pair(req_kwargs, {"error": str(exc), "type": type(exc).__name__}, status="error")
             raise
 
     def stream(self, payload) -> Iterator[Any]:
@@ -183,16 +190,16 @@ class LoggedGigaChatSDK(ProviderLoggingMixin, gigachat.GigaChat):
 
     async def astream(self, payload) -> AsyncIterator[Any]:
         chat_data = _parse_chat(payload, self._settings)
-        self._extract_prompts(chat_data)
+        await self._aextract_prompts(chat_data)
         req_kwargs = chat_api._get_stream_kwargs(chat=chat_data, access_token=self.token)
         chunks: list[Any] = []
         try:
             async for chunk in super().astream(payload):
                 chunks.append(chunk)
                 yield chunk
-            self._log_pair(req_kwargs, {"chunks": chunks})
+            await self._alog_pair(req_kwargs, {"chunks": chunks})
         except Exception as exc:
-            self._log_pair(req_kwargs, {"error": str(exc), "type": type(exc).__name__}, status="error")
+            await self._alog_pair(req_kwargs, {"error": str(exc), "type": type(exc).__name__}, status="error")
             raise
 
 
