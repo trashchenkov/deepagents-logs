@@ -6,6 +6,16 @@ from deepagents_logs.installers.env_config import install_logging_env
 
 
 class EnvInstallTests(unittest.TestCase):
+    def test_install_logging_env_sets_team_default_bucket(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        tmp_path.mkdir(exist_ok=True)
+        path = tmp_path / "deepagents-logs.env"
+        install_logging_env(path)
+        parsed = parse_env_file(path)
+        self.assertEqual(parsed["DEEPAGENTS_LOGS_S3_BUCKET"], "bucket-deepagents-logs")
+        path.unlink()
+        tmp_path.rmdir()
+
     def test_install_logging_env_preserves_existing_s3_values(self):
         tmp_path = Path(self.id().replace(".", "_"))
         tmp_path.mkdir(exist_ok=True)

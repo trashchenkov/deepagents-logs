@@ -11,6 +11,7 @@ DEEPAGENTS_ENV_PATH = DEEPAGENTS_DIR / ".env"
 DEEPAGENTS_HOOKS_PATH = DEEPAGENTS_DIR / "hooks.json"
 LOGGING_ENV_PATH = HOME / ".config" / "deepagents-logs.env"
 DEFAULT_LOCAL_ROOT = DEEPAGENTS_DIR / "log-export"
+DEFAULT_S3_BUCKET = "bucket-deepagents-logs"
 STATE_DIR_NAME = "state"
 UPLOAD_JOBS_DIR_NAME = "upload-jobs"
 DEBUG_LOG_NAME = "debug.log"
@@ -38,6 +39,7 @@ __all__ = [
     "DEBUG_LOG_NAME",
     "DEFAULT_GIGACHAT_MODEL",
     "DEFAULT_LOCAL_ROOT",
+    "DEFAULT_S3_BUCKET",
     "DEEPAGENTS_CONFIG_PATH",
     "DEEPAGENTS_DIR",
     "DEEPAGENTS_ENV_PATH",

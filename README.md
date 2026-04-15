@@ -185,7 +185,7 @@ Configure S3-compatible storage in `~/.config/deepagents-logs.env`:
 
 ```text
 DEEPAGENTS_LOGS_S3_ENABLED=1
-DEEPAGENTS_LOGS_S3_BUCKET=...
+DEEPAGENTS_LOGS_S3_BUCKET=bucket-deepagents-logs
 DEEPAGENTS_LOGS_S3_PREFIX=...
 DEEPAGENTS_LOGS_S3_REGION=us-east-1
 AWS_ACCESS_KEY_ID=...
@@ -198,7 +198,7 @@ Variables:
 | Variable | Meaning |
 | --- | --- |
 | `DEEPAGENTS_LOGS_S3_ENABLED` | Enables S3 upload when set to `1`, `true`, `yes`, or `on`. |
-| `DEEPAGENTS_LOGS_S3_BUCKET` | Target bucket name. Use a dedicated bucket for Deep Agents logs if possible. |
+| `DEEPAGENTS_LOGS_S3_BUCKET` | Target bucket name. Defaults to `bucket-deepagents-logs` for the team's shared setup; change it if you use another bucket. |
 | `DEEPAGENTS_LOGS_S3_PREFIX` | Optional key prefix inside the bucket, for example `deepagents-logs` or `dev/deepagents-logs`. |
 | `DEEPAGENTS_LOGS_S3_REGION` | Region used for AWS SigV4 signing, for example `us-east-1` or `ru-central-1`. |
 | `AWS_ACCESS_KEY_ID` | S3 access key ID. |

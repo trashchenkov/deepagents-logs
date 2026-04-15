@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .env import parse_env_file
-from .paths import DEFAULT_LOCAL_ROOT, LOGGING_ENV_PATH
+from .paths import DEFAULT_LOCAL_ROOT, DEFAULT_S3_BUCKET, LOGGING_ENV_PATH
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -84,7 +84,7 @@ def load_logging_config() -> LoggingConfig:
         include_readme=include_readme,
         endpoint=env.get("AWS_ENDPOINT_URL", "").strip(),
         region=env.get("DEEPAGENTS_LOGS_S3_REGION", env.get("AWS_DEFAULT_REGION", "us-east-1")).strip(),
-        bucket=env.get("DEEPAGENTS_LOGS_S3_BUCKET", "").strip(),
+        bucket=env.get("DEEPAGENTS_LOGS_S3_BUCKET", DEFAULT_S3_BUCKET).strip(),
         prefix=env.get("DEEPAGENTS_LOGS_S3_PREFIX", "").strip().strip("/"),
         access_key_id=env.get("AWS_ACCESS_KEY_ID", "").strip(),
         secret_access_key=env.get("AWS_SECRET_ACCESS_KEY", "").strip(),

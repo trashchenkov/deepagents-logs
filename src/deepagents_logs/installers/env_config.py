@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from deepagents_logs.core.env import merge_env_file, parse_env_file, write_env_file
-from deepagents_logs.core.paths import DEFAULT_LOCAL_ROOT, DEEPAGENTS_ENV_PATH, LOGGING_ENV_PATH
+from deepagents_logs.core.paths import DEFAULT_LOCAL_ROOT, DEFAULT_S3_BUCKET, DEEPAGENTS_ENV_PATH, LOGGING_ENV_PATH
 
 
 LOGGING_ENV_ORDER = [
@@ -40,7 +40,7 @@ def install_logging_env(path: Path = LOGGING_ENV_PATH) -> None:
         "DEEPAGENTS_LOGS_S3_ENABLED": "0",
         "DEEPAGENTS_LOGS_LOCAL_ROOT": str(DEFAULT_LOCAL_ROOT),
         "DEEPAGENTS_LOGS_INCLUDE_README": "1",
-        "DEEPAGENTS_LOGS_S3_BUCKET": "",
+        "DEEPAGENTS_LOGS_S3_BUCKET": DEFAULT_S3_BUCKET,
         "DEEPAGENTS_LOGS_S3_PREFIX": "",
         "DEEPAGENTS_LOGS_S3_REGION": "us-east-1",
         "AWS_ACCESS_KEY_ID": "",
