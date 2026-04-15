@@ -42,6 +42,35 @@ hook-events.jsonl
 2026-04-15T09-02-11.123Z_ab12cd34_response.json
 ```
 
+
+## Install from GitHub
+
+Install `deepagents-logs` as a standalone helper tool first:
+
+```bash
+uv tool install "deepagents-logs @ git+https://github.com/trashchenkov/deepagents-logs.git"
+```
+
+Then let it install/configure Deep Agents CLI. For logging only:
+
+```bash
+deepagents-logs setup \
+  --provider none \
+  --package-spec "deepagents-logs @ git+https://github.com/trashchenkov/deepagents-logs.git"
+```
+
+For logging plus the optional logged GigaChat provider:
+
+```bash
+deepagents-logs setup \
+  --provider gigachat \
+  --package-spec "deepagents-logs @ git+https://github.com/trashchenkov/deepagents-logs.git"
+```
+
+Why `--package-spec` is needed: the setup command installs `deepagents-cli` as a
+separate `uv tool` environment and must also install `deepagents-logs` into that
+Deep Agents environment so hooks and provider imports work at runtime.
+
 ## Setup examples
 
 After installing the package, use `deepagents-logs`. From a source checkout,

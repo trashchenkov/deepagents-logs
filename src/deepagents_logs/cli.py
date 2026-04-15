@@ -31,16 +31,20 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def install_into_deepagents_env(include_gigachat: bool) -> None:
+def install_into_deepagents_env(include_gigachat: bool, package_spec: str | None = None) -> None:
     command = [
         "uv",
         "tool",
         "install",
         "deepagents-cli",
         "--reinstall",
-        "--with-editable",
-        str(_repo_root()),
     ]
+    if package_spec:
+        command.extend(["--with", package_spec])
+    elif (_repo_root() / "pyproject.toml").exists():
+        command.extend(["--with-editable", str(_repo_root())])
+    else:
+        command.extend(["--with", "deepagents-logs"])
     if include_gigachat:
         command.extend(["--with", "langchain-gigachat"])
     subprocess.run(command, check=True)
@@ -53,7 +57,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
         install_gigachat_env_template()
         install_logged_gigachat_provider(default_model=args.default_model, set_default=not args.no_set_default)
     if args.install_into_deepagents:
-        install_into_deepagents_env(include_gigachat=args.provider == "gigachat")
+        install_into_deepagents_env(
+            include_gigachat=args.provider == "gigachat",
+            package_spec=args.package_spec,
+        )
     print(json.dumps({
         "ok": True,
         "logging_env": str(LOGGING_ENV_PATH),
@@ -144,6 +151,16 @@ def build_parser() -> argparse.ArgumentParser:
     setup = sub.add_parser("setup")
     setup.add_argument("--provider", choices=["none", "gigachat"], default="none")
     setup.add_argument("--default-model", default=DEFAULT_GIGACHAT_MODEL)
+    setup.add_argument(
+        "--package-spec",
+        default=None,
+        help=(
+            "Requirement spec used to install deepagents-logs into the Deep Agents CLI tool env. "
+            "Use this for GitHub installs, e.g. "
+            "'deepagents-logs @ git+https://github.com/owner/deepagents-logs.git'. "
+            "Source checkouts default to --with-editable <repo-root>."
+        ),
+    )
     setup.add_argument("--no-set-default", action="store_true")
     setup.add_argument("--no-install-into-deepagents", dest="install_into_deepagents", action="store_false")
     setup.set_defaults(func=cmd_setup, install_into_deepagents=True)
