@@ -10,7 +10,11 @@ from deepagents_logs.doctor.checks import run_doctor
 from deepagents_logs.installers.deepagents_config import (
     configured_default_model,
     install_logged_gigachat_provider,
+    install_logged_langchain_provider,
+    langchain_logged_provider_installed,
+    legacy_logged_gigachat_provider_installed,
     logged_provider_installed,
+    normalize_logged_model,
     remove_logged_provider,
 )
 from deepagents_logs.installers.env_config import install_gigachat_env_template, install_logging_env, set_logging_toggle
@@ -22,7 +26,9 @@ from deepagents_logs.core.paths import (
     DEEPAGENTS_ENV_PATH,
     DEEPAGENTS_HOOKS_PATH,
     DEFAULT_GIGACHAT_MODEL,
+    DEFAULT_LOGGED_MODEL,
     LOGGED_GIGACHAT_PROVIDER,
+    LOGGED_LANGCHAIN_PROVIDER,
     LOGGING_ENV_PATH,
 )
 
@@ -65,12 +71,39 @@ def install_into_deepagents_env(include_gigachat: bool, package_spec: str | None
     subprocess.run(command, check=True)
 
 
+def _resolve_default_model(requested: str | None, *, provider: str) -> str:
+    if requested:
+        if provider == "gigachat":
+            return normalize_logged_model(requested, provider_hint="gigachat")
+        return normalize_logged_model(requested)
+    if provider == "langchain":
+        current_default = configured_default_model()
+        if current_default and not current_default.startswith(f"{LOGGED_LANGCHAIN_PROVIDER}:"):
+            return current_default
+        if current_default and current_default.startswith(f"{LOGGED_LANGCHAIN_PROVIDER}:"):
+            return current_default.split(":", 1)[1]
+        return DEFAULT_LOGGED_MODEL
+    return normalize_logged_model(DEFAULT_GIGACHAT_MODEL, provider_hint="gigachat")
+
+
+def _active_logged_inner_model(default_model: str | None) -> str | None:
+    if not default_model:
+        return None
+    prefix = f"{LOGGED_LANGCHAIN_PROVIDER}:"
+    if default_model.startswith(prefix):
+        return default_model.removeprefix(prefix)
+    return None
+
+
 def cmd_setup(args: argparse.Namespace) -> int:
     install_logging_env()
     install_hook()
+    resolved_model = _resolve_default_model(args.default_model, provider=args.provider)
     if args.provider == "gigachat":
         install_gigachat_env_template()
-        install_logged_gigachat_provider(default_model=args.default_model, set_default=not args.no_set_default)
+        install_logged_gigachat_provider(default_model=resolved_model, set_default=not args.no_set_default)
+    elif args.provider == "langchain":
+        install_logged_langchain_provider(default_model=resolved_model, set_default=not args.no_set_default)
     if args.install_into_deepagents:
         install_into_deepagents_env(
             include_gigachat=args.provider == "gigachat",
@@ -82,6 +115,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "hooks": str(DEEPAGENTS_HOOKS_PATH),
         "config": str(DEEPAGENTS_CONFIG_PATH),
         "provider": args.provider,
+        "logged_default_model": resolved_model if args.provider != "none" else None,
     }, ensure_ascii=False, indent=2))
     return 0
 
@@ -116,9 +150,14 @@ def cmd_status(_: argparse.Namespace) -> int:
             key: bool(deepagents_env.get(key))
             for key in GIGACHAT_STATUS_ENV_KEYS
         },
-        "logged_provider_name": LOGGED_GIGACHAT_PROVIDER,
-        "logged_gigachat_provider_installed": logged_provider_installed(),
+        "logged_provider_name": LOGGED_LANGCHAIN_PROVIDER,
+        "legacy_logged_provider_name": LOGGED_GIGACHAT_PROVIDER,
+        "logged_provider_installed": logged_provider_installed(),
+        "langchain_logged_provider_installed": langchain_logged_provider_installed(),
+        "legacy_logged_gigachat_provider_installed": legacy_logged_gigachat_provider_installed(),
+        "logged_gigachat_provider_installed": legacy_logged_gigachat_provider_installed(),
         "deepagents_default_model": configured_default_model(),
+        "logged_inner_model": _active_logged_inner_model(configured_default_model()),
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -137,14 +176,21 @@ def cmd_s3(args: argparse.Namespace) -> int:
 
 
 def cmd_provider(args: argparse.Namespace) -> int:
+    resolved_model = _resolve_default_model(args.default_model, provider=args.name)
     if args.name == "gigachat":
         install_gigachat_env_template()
-        install_logged_gigachat_provider(default_model=args.default_model, set_default=not args.no_set_default)
+        install_logged_gigachat_provider(default_model=resolved_model, set_default=not args.no_set_default)
+    elif args.name == "langchain":
+        install_logged_langchain_provider(default_model=resolved_model, set_default=not args.no_set_default)
     elif args.name == "none":
         remove_logged_provider()
     else:
         raise SystemExit(f"Unsupported provider: {args.name}")
-    print(json.dumps({"ok": True, "provider": args.name}))
+    print(json.dumps({
+        "ok": True,
+        "provider": args.name,
+        "logged_default_model": resolved_model if args.name != "none" else None,
+    }))
     return 0
 
 
@@ -168,8 +214,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     setup = sub.add_parser("setup")
-    setup.add_argument("--provider", choices=["none", "gigachat"], default="none")
-    setup.add_argument("--default-model", default=DEFAULT_GIGACHAT_MODEL)
+    setup.add_argument("--provider", choices=["none", "langchain", "gigachat"], default="none")
+    setup.add_argument(
+        "--default-model",
+        default=None,
+        help=(
+            "Inner model to wrap with langchain_logged. "
+            "Examples: 'openai:gpt-5.4', 'anthropic:claude-sonnet-4-6', or "
+            "'GigaChat-2-Max' with --provider gigachat."
+        ),
+    )
     setup.add_argument(
         "--package-spec",
         default=None,
@@ -196,8 +250,8 @@ def build_parser() -> argparse.ArgumentParser:
     s3.set_defaults(func=cmd_s3)
 
     provider = sub.add_parser("provider")
-    provider.add_argument("name", choices=["none", "gigachat"])
-    provider.add_argument("--default-model", default=DEFAULT_GIGACHAT_MODEL)
+    provider.add_argument("name", choices=["none", "langchain", "gigachat"])
+    provider.add_argument("--default-model", default=None)
     provider.add_argument("--no-set-default", action="store_true")
     provider.set_defaults(func=cmd_provider)
 

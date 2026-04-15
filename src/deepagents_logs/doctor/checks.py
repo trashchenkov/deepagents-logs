@@ -42,7 +42,7 @@ def run_doctor() -> DoctorResult:
         ),
     })
     checks.append({
-        "name": "optional GigaChat provider status",
+        "name": "optional logged model adapter status",
         "ok": True,
         "installed": logged_provider_installed(),
     })

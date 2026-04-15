@@ -1,15 +1,15 @@
 # deepagents-logs
 
-Provider-agnostic logging for Deep Agents CLI, plus optional one-command setup for
-a logged GigaChat provider.
+Provider-agnostic logging for Deep Agents CLI, with payload capture moved to the
+LangChain chat-model layer instead of a single provider SDK.
 
 ## What it does
 
 This package has two independent layers:
 
 1. **Logging core** — hooks into Deep Agents CLI and exports session artifacts.
-2. **Optional provider setup** — configures GigaChat for Deep Agents CLI and routes
-   provider traffic through a logged adapter.
+2. **Optional logged model setup** — installs a `langchain_logged` wrapper that can
+   sit in front of any LangChain-compatible Deep Agents model spec.
 
 You can use the logging core without GigaChat.
 
@@ -20,19 +20,19 @@ The logging core:
 - optionally mirrors those exports to S3-compatible storage
 - captures lifecycle metadata for any Deep Agents model/provider configuration
 
-The optional GigaChat setup:
+The optional logged model setup:
 
-- adds a `gigachat_logged` provider to `~/.deepagents/config.toml`
-- can set `gigachat_logged:GigaChat-2-Max` as the Deep Agents default model
+- adds a `langchain_logged` provider to `~/.deepagents/config.toml`
+- wraps an inner model spec such as `gigachat:GigaChat-2-Max` or
+  `openai:gpt-5.4`
 - preserves your existing `~/.deepagents/.env` values
-- logs GigaChat request/response pairs alongside the Deep Agents session export
+- logs LangChain request/response pairs alongside the Deep Agents session export
 
-Important: full request/response logging currently requires a logged provider
-adapter. If Deep Agents is configured to use the regular `gigachat` provider
-directly, `deepagents-logs` will still upload session metadata and hook events,
-but it will not see the actual LLM request/response payloads. For full GigaChat
-payload logs, configure Deep Agents to use `gigachat_logged` through this
-package.
+Important: full request/response logging still requires Deep Agents to use the
+logged wrapper. If Deep Agents keeps using a regular provider directly, this
+package will still upload session metadata and hook events, but it will not see
+the actual LLM payloads. The recommended path is to switch the default model to
+`langchain_logged:<provider:model>`.
 
 ## Key layout
 
@@ -67,7 +67,16 @@ deepagents-logs setup \
   --package-spec "deepagents-logs @ git+https://github.com/trashchenkov/deepagents-logs.git"
 ```
 
-For logging plus the optional logged GigaChat provider:
+For logging plus a LangChain-level logged model wrapper around your current Deep
+Agents default:
+
+```bash
+deepagents-logs setup \
+  --provider langchain \
+  --package-spec "deepagents-logs @ git+https://github.com/trashchenkov/deepagents-logs.git"
+```
+
+For logging plus the optional logged GigaChat convenience setup:
 
 ```bash
 deepagents-logs setup \
@@ -79,25 +88,28 @@ Why `--package-spec` is needed: the setup command installs `deepagents-cli` as a
 separate `uv tool` environment and must also install `deepagents-logs` into that
 Deep Agents environment so hooks and provider imports work at runtime.
 
-If you already had GigaChat configured manually, still run the `--provider
-gigachat` setup above for full payload logging. It preserves `~/.deepagents/.env`
-credentials, installs `gigachat_logged`, and switches the default model to:
+If you already had a Deep Agents model configured manually, run the
+`--provider langchain` setup for full payload logging. It wraps your current
+default model when possible. If there is no current default, it falls back to a
+logged GigaChat default. The managed block now looks like:
 
 ```toml
 [models]
-default = "gigachat_logged:GigaChat-2-Max"
+default = "langchain_logged:gigachat:GigaChat-2-Max"
 
-[models.providers.gigachat_logged]
-class_path = "deepagents_logs.providers.gigachat:LoggedGigaChat"
+[models.providers.langchain_logged]
+class_path = "deepagents_logs.providers.langchain:LoggedLangChainModel"
+models = ["gigachat:GigaChat-2-Max"]
 ```
 
-If the default remains `gigachat:GigaChat-2-Max` or another non-logged provider,
-only metadata logs are expected.
+If the default remains `gigachat:GigaChat-2-Max`, `openai:gpt-5.4`, or any other
+non-logged provider spec, only metadata logs are expected.
 
 ## Run Deep Agents normally
 
 After setup, use Deep Agents CLI the usual way. `deepagents-logs` stays in the
-background through `~/.deepagents/hooks.json` and the optional logged provider.
+background through `~/.deepagents/hooks.json` and the optional logged model
+wrapper.
 
 ```bash
 # interactive session
@@ -114,8 +126,8 @@ Expected files:
 
 - With hooks only / non-logged provider: `hook-events.jsonl`, `session-meta.json`
   and sometimes `README.md`.
-- With `gigachat_logged`: the same metadata files plus `*_request.json` and
-  `*_response.json` provider payload logs.
+- With `langchain_logged:<provider:model>`: the same metadata files plus
+  `*_request.json` and `*_response.json` LangChain payload logs.
 
 ## Setup examples
 
@@ -126,13 +138,19 @@ replace `deepagents-logs` with `PYTHONPATH=src python -m deepagents_logs.cli`.
 # logging core only: no provider config is changed
 deepagents-logs setup --provider none
 
-# logging core + logged GigaChat provider
+# logging core + logged wrapper around the current/default model
+deepagents-logs setup --provider langchain
+
+# logging core + logged GigaChat convenience setup
 deepagents-logs setup --provider gigachat
 
-# later add the logged GigaChat provider
+# later wrap a specific model explicitly
+deepagents-logs provider langchain --default-model openai:gpt-5.4
+
+# later add the logged GigaChat convenience wrapper
 deepagents-logs provider gigachat
 
-# later remove only the managed GigaChat provider block
+# later remove only the managed logged-provider block
 deepagents-logs provider none
 
 # inspect installation state
@@ -163,7 +181,8 @@ Deep Agents config remains in:
 ~/.deepagents/hooks.json
 ```
 
-`~/.deepagents/.env` is where GigaChat credentials belong, for example:
+`~/.deepagents/.env` is where GigaChat credentials belong when you use the
+GigaChat convenience setup, for example:
 
 ```text
 GIGACHAT_CREDENTIALS=...
@@ -235,6 +254,7 @@ If S3 is disabled, local logging still works.
 ## Design notes
 
 - GigaChat support is intentionally optional.
+- The recommended payload path is `langchain_logged:<provider:model>`.
 - Provider adapters live under `deepagents_logs.providers`.
 - The core hook/session logger should remain provider-agnostic.
 - Managed config blocks are bracketed by comments so they can be safely replaced

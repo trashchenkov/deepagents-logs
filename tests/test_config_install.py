@@ -4,28 +4,54 @@ import unittest
 from deepagents_logs.installers.deepagents_config import (
     configured_default_model,
     install_logged_gigachat_provider,
+    install_logged_langchain_provider,
+    langchain_logged_provider_installed,
+    legacy_logged_gigachat_provider_installed,
     logged_provider_installed,
+    normalize_logged_model,
     remove_logged_provider,
 )
 
 
 class ConfigInstallTests(unittest.TestCase):
-    def test_install_logged_provider_updates_models_default(self):
+    def test_install_logged_langchain_provider_updates_models_default(self):
         tmp_path = Path(self.id().replace(".", "_"))
         tmp_path.mkdir(exist_ok=True)
         config = tmp_path / "config.toml"
         config.write_text('[models]\ndefault = "openai:gpt-4o"\n')
-        install_logged_gigachat_provider(
-            config, default_model="GigaChat-2-Max", set_default=True
+        install_logged_langchain_provider(
+            config,
+            default_model="openai:gpt-5.4",
+            set_default=True,
         )
         text = config.read_text()
-        self.assertIn('default = "gigachat_logged:GigaChat-2-Max"', text)
-        self.assertEqual(configured_default_model(config), "gigachat_logged:GigaChat-2-Max")
+        self.assertIn('default = "langchain_logged:openai:gpt-5.4"', text)
+        self.assertEqual(
+            configured_default_model(config),
+            "langchain_logged:openai:gpt-5.4",
+        )
         self.assertTrue(logged_provider_installed(config))
+        self.assertTrue(langchain_logged_provider_installed(config))
+        self.assertFalse(legacy_logged_gigachat_provider_installed(config))
         self.assertIn(
-            'class_path = "deepagents_logs.providers.gigachat:LoggedGigaChat"',
+            'class_path = "deepagents_logs.providers.langchain:LoggedLangChainModel"',
             text,
         )
+        config.unlink()
+        tmp_path.rmdir()
+
+    def test_install_logged_gigachat_provider_normalizes_inner_model(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        tmp_path.mkdir(exist_ok=True)
+        config = tmp_path / "config.toml"
+        install_logged_gigachat_provider(
+            config,
+            default_model="GigaChat-2-Max",
+            set_default=True,
+        )
+        text = config.read_text()
+        self.assertIn('default = "langchain_logged:gigachat:GigaChat-2-Max"', text)
+        self.assertIn('models = ["gigachat:GigaChat-2-Max"]', text)
         config.unlink()
         tmp_path.rmdir()
 
@@ -33,10 +59,10 @@ class ConfigInstallTests(unittest.TestCase):
         tmp_path = Path(self.id().replace(".", "_"))
         tmp_path.mkdir(exist_ok=True)
         config = tmp_path / "config.toml"
-        install_logged_gigachat_provider(config)
+        install_logged_langchain_provider(config)
         remove_logged_provider(config)
         text = config.read_text()
-        self.assertNotIn("deepagents_logs.providers.gigachat", text)
+        self.assertNotIn("deepagents_logs.providers.langchain", text)
         self.assertFalse(logged_provider_installed(config))
         config.unlink()
         tmp_path.rmdir()
@@ -46,13 +72,24 @@ class ConfigInstallTests(unittest.TestCase):
         tmp_path.mkdir(exist_ok=True)
         config = tmp_path / "config.toml"
         config.write_text(
-            '[models.providers.gigachat_logged]\n'
-            'class_path = "deepagents_logs.providers.gigachat:LoggedGigaChat"\n'
+            '[models.providers.langchain_logged]\n'
+            'class_path = "deepagents_logs.providers.langchain:LoggedLangChainModel"\n'
             'enabled = true\n'
         )
         self.assertTrue(logged_provider_installed(config))
+        self.assertTrue(langchain_logged_provider_installed(config))
         config.unlink()
         tmp_path.rmdir()
+
+    def test_normalize_logged_model_uses_provider_hint_when_needed(self):
+        self.assertEqual(
+            normalize_logged_model("GigaChat-2-Max", provider_hint="gigachat"),
+            "gigachat:GigaChat-2-Max",
+        )
+        self.assertEqual(
+            normalize_logged_model("openai:gpt-5.4", provider_hint="gigachat"),
+            "openai:gpt-5.4",
+        )
 
 
 class CliStatusTests(unittest.TestCase):

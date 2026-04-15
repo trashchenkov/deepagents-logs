@@ -17,8 +17,10 @@ UPLOAD_JOBS_DIR_NAME = "upload-jobs"
 DEBUG_LOG_NAME = "debug.log"
 MANAGED_BLOCK_START = "# BEGIN deepagents-logs managed block"
 MANAGED_BLOCK_END = "# END deepagents-logs managed block"
+LOGGED_LANGCHAIN_PROVIDER = "langchain_logged"
 LOGGED_GIGACHAT_PROVIDER = "gigachat_logged"
 DEFAULT_GIGACHAT_MODEL = "GigaChat-2-Max"
+DEFAULT_LOGGED_MODEL = f"gigachat:{DEFAULT_GIGACHAT_MODEL}"
 GIGACHAT_MODELS = [
     "GigaChat-2-Lite",
     "GigaChat-2-Pro",
@@ -39,6 +41,7 @@ __all__ = [
     "DEBUG_LOG_NAME",
     "DEFAULT_GIGACHAT_MODEL",
     "DEFAULT_LOCAL_ROOT",
+    "DEFAULT_LOGGED_MODEL",
     "DEFAULT_S3_BUCKET",
     "DEEPAGENTS_CONFIG_PATH",
     "DEEPAGENTS_DIR",
@@ -47,6 +50,7 @@ __all__ = [
     "GIGACHAT_MODELS",
     "HOME",
     "LOGGED_GIGACHAT_PROVIDER",
+    "LOGGED_LANGCHAIN_PROVIDER",
     "LOGGING_ENV_PATH",
     "MANAGED_BLOCK_END",
     "MANAGED_BLOCK_START",
