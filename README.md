@@ -71,6 +71,22 @@ Why `--package-spec` is needed: the setup command installs `deepagents-cli` as a
 separate `uv tool` environment and must also install `deepagents-logs` into that
 Deep Agents environment so hooks and provider imports work at runtime.
 
+## Run Deep Agents normally
+
+After setup, use Deep Agents CLI the usual way. `deepagents-logs` stays in the
+background through `~/.deepagents/hooks.json` and the optional logged provider.
+
+```bash
+# interactive session
+deepagents
+
+# one-shot non-interactive task
+deepagents -n "Reply with exactly: OK" -q --no-stream
+```
+
+Logs are written locally under `~/.deepagents/log-export/` and, if S3 is enabled,
+mirrored to the configured bucket/prefix.
+
 ## Setup examples
 
 After installing the package, use `deepagents-logs`. From a source checkout,
