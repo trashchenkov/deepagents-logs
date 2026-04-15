@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepagents-logs"
+version = "0.1.0"
+description = "Non-invasive local and S3 logging for Deep Agents CLI sessions and provider traffic"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{name = "Sergej"}]
+dependencies = []
+
+[project.scripts]
+deepagents-logs = "deepagents_logs.cli:main"
+deepagents-logs-hook = "deepagents_logs.hooks.dispatcher:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
