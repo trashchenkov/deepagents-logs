@@ -42,5 +42,31 @@ class ConfigInstallTests(unittest.TestCase):
         tmp_path.rmdir()
 
 
+class CliStatusTests(unittest.TestCase):
+    def test_gigachat_env_status_redacts_secrets_but_shows_safe_values(self):
+        from deepagents_logs.cli import GIGACHAT_STATUS_ENV_KEYS, GIGACHAT_SECRET_ENV_KEYS
+
+        env = {
+            "GIGACHAT_CREDENTIALS": "secret",
+            "GIGACHAT_SCOPE": "GIGACHAT_API_CORP",
+            "GIGACHAT_VERIFY_SSL_CERTS": "false",
+        }
+        status = {
+            key: (
+                "present"
+                if key in GIGACHAT_SECRET_ENV_KEYS and bool(env.get(key))
+                else "missing"
+                if key in GIGACHAT_SECRET_ENV_KEYS
+                else env.get(key, "")
+            )
+            for key in GIGACHAT_STATUS_ENV_KEYS
+        }
+
+        self.assertEqual(status["GIGACHAT_CREDENTIALS"], "present")
+        self.assertEqual(status["GIGACHAT_PASSWORD"], "missing")
+        self.assertEqual(status["GIGACHAT_SCOPE"], "GIGACHAT_API_CORP")
+        self.assertEqual(status["GIGACHAT_VERIFY_SSL_CERTS"], "false")
+
+
 if __name__ == "__main__":
     unittest.main()

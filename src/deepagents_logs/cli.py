@@ -27,6 +27,21 @@ from deepagents_logs.core.paths import (
 )
 
 
+GIGACHAT_SECRET_ENV_KEYS = {
+    "GIGACHAT_CREDENTIALS",
+    "GIGACHAT_USER",
+    "GIGACHAT_PASSWORD",
+}
+GIGACHAT_STATUS_ENV_KEYS = [
+    "GIGACHAT_CREDENTIALS",
+    "GIGACHAT_SCOPE",
+    "GIGACHAT_USER",
+    "GIGACHAT_PASSWORD",
+    "GIGACHAT_VERIFY_SSL_CERTS",
+    "GIGACHAT_CA_BUNDLE_FILE",
+]
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -74,6 +89,16 @@ def cmd_setup(args: argparse.Namespace) -> int:
 def cmd_status(_: argparse.Namespace) -> int:
     config = load_logging_config()
     deepagents_env = parse_env_file(DEEPAGENTS_ENV_PATH)
+    gigachat_env = {
+        key: (
+            "present"
+            if key in GIGACHAT_SECRET_ENV_KEYS and bool(deepagents_env.get(key))
+            else "missing"
+            if key in GIGACHAT_SECRET_ENV_KEYS
+            else deepagents_env.get(key, "")
+        )
+        for key in GIGACHAT_STATUS_ENV_KEYS
+    }
     payload = {
         "logging_env_path": str(LOGGING_ENV_PATH),
         "config_path": str(DEEPAGENTS_CONFIG_PATH),
@@ -86,16 +111,10 @@ def cmd_status(_: argparse.Namespace) -> int:
         "prefix": config.prefix,
         "s3_endpoint": config.endpoint,
         "s3_region": config.region,
+        "gigachat_env": gigachat_env,
         "gigachat_env_present": {
             key: bool(deepagents_env.get(key))
-            for key in [
-                "GIGACHAT_CREDENTIALS",
-                "GIGACHAT_SCOPE",
-                "GIGACHAT_USER",
-                "GIGACHAT_PASSWORD",
-                "GIGACHAT_VERIFY_SSL_CERTS",
-                "GIGACHAT_CA_BUNDLE_FILE",
-            ]
+            for key in GIGACHAT_STATUS_ENV_KEYS
         },
         "logged_provider_name": LOGGED_GIGACHAT_PROVIDER,
         "logged_gigachat_provider_installed": logged_provider_installed(),

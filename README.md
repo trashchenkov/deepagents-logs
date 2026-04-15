@@ -178,6 +178,12 @@ deepagents-logs status
 deepagents-logs doctor
 ```
 
+`deepagents-logs status` redacts secret GigaChat values as `present` or
+`missing`, but prints non-secret config values directly. For example,
+`GIGACHAT_VERIFY_SSL_CERTS=false` is shown as `"false"` rather than `true`;
+`true` under the legacy `gigachat_env_present` field means only that a variable
+exists.
+
 If S3 is disabled, local logging still works.
 
 ## Design notes
