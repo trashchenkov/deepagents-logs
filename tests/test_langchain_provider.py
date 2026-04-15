@@ -17,6 +17,12 @@ try:
 except Exception:
     HAS_LANGCHAIN = False
 
+try:
+    import langchain_gigachat.chat_models  # noqa: F401
+    HAS_LANGCHAIN_GIGACHAT = True
+except Exception:
+    HAS_LANGCHAIN_GIGACHAT = False
+
 
 if HAS_LANGCHAIN:
     class FakeInnerModel(BaseChatModel):
@@ -79,8 +85,8 @@ class LoggedLangChainModelTests(unittest.TestCase):
             return_value=SimpleNamespace(model=FakeInnerModel(model="fake-model")),
         ):
             wrapper = LoggedLangChainModel(model="openai:gpt-5.4")
-        wrapper._logging_handler._session_id_getter = lambda: "session-1"
-        wrapper._logging_handler._cwd_getter = lambda: "/tmp/project"
+        wrapper._current_session_id = lambda: "session-1"
+        wrapper._current_call_cwd = lambda: "/tmp/project"
 
         message = wrapper.invoke("hello from langchain wrapper")
         self.assertEqual(message.content, "logged reply")
@@ -95,6 +101,28 @@ class LoggedLangChainModelTests(unittest.TestCase):
         self.assertEqual(request_payload["source"], "langchain:openai")
         self.assertEqual(request_payload["body"]["model"], "openai:gpt-5.4")
         self.assertEqual(response_payload["status"], 200)
+
+        self._clear_logging_env()
+        self._remove_tree(tmp_path)
+
+    @unittest.skipUnless(HAS_LANGCHAIN_GIGACHAT, "langchain_gigachat not available")
+    def test_logged_langchain_model_supports_gigachat_inner_model(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        tmp_path.mkdir(exist_ok=True)
+        self._configure_local_logging(tmp_path)
+        with patch("langchain_gigachat.chat_models.GigaChat", FakeInnerModel):
+            wrapper = LoggedLangChainModel(model="gigachat:GigaChat-2-Max")
+        wrapper._current_session_id = lambda: "session-giga"
+        wrapper._current_call_cwd = lambda: "/tmp/project"
+
+        message = wrapper.invoke("hello giga")
+        self.assertEqual(message.content, "logged reply")
+
+        request_files = list((tmp_path / "log-export").rglob("*_request.json"))
+        self.assertEqual(len(request_files), 1)
+        request_payload = json.loads(request_files[0].read_text())
+        self.assertEqual(request_payload["source"], "langchain:gigachat")
+        self.assertEqual(request_payload["body"]["model"], "gigachat:GigaChat-2-Max")
 
         self._clear_logging_env()
         self._remove_tree(tmp_path)

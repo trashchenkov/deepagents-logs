@@ -1,169 +1,45 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from threading import Lock
+import asyncio
+from contextvars import ContextVar
+import importlib
+import os
 from typing import Any
-from uuid import UUID
 
 from pydantic import Field, PrivateAttr
 
-from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage
-from langchain_core.outputs import ChatGenerationChunk, ChatResult, LLMResult
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, BaseMessageChunk
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult, LLMResult
 
+from deepagents_logs.core.env import parse_env_file
+from deepagents_logs.core.paths import DEEPAGENTS_ENV_PATH
 from deepagents_logs.core.paths import LOGGED_GIGACHAT_PROVIDER, LOGGED_LANGCHAIN_PROVIDER
 from deepagents_logs.core.serialize import to_serializable
 from deepagents_logs.core.session_logger import SessionArtifactLogger
 from deepagents_logs.providers.base import ProviderLoggingMixin
 
 
-@dataclass(frozen=True)
-class PendingChatRun:
-    session_id: str
-    cwd: str
-    request_body: dict[str, Any]
-    model_name: str
-
-
-class LangChainLoggingCallback(BaseCallbackHandler):
-    run_inline = True
-
-    def __init__(
-        self,
-        *,
-        session_logger: SessionArtifactLogger,
-        session_id_getter: Any,
-        cwd_getter: Any,
-        model_name: str,
-        inner_provider: str | None,
-    ) -> None:
-        self._session_logger = session_logger
-        self._session_id_getter = session_id_getter
-        self._cwd_getter = cwd_getter
-        self._model_name = model_name
-        self._inner_provider = inner_provider
-        self._pending: dict[UUID, PendingChatRun] = {}
-        self._lock = Lock()
-
-    def on_chat_model_start(
-        self,
-        serialized: dict[str, Any],
-        messages: list[list[BaseMessage]],
-        *,
-        run_id: UUID,
-        metadata: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        session_id = self._session_id_getter()
-        if not session_id:
-            return
-        cwd = self._cwd_getter()
-        request_body = {
-            "messages": to_serializable(messages),
-            "metadata": metadata or {},
-            "invocation_params": kwargs.get("invocation_params"),
-            "options": kwargs.get("options"),
-            "serialized": serialized,
-            "model": self._model_name,
-            "provider": self._inner_provider,
-        }
-        prompts = _extract_prompt_texts(messages)
-        if prompts:
-            started_at = self._session_logger.ensure_state(session_id, cwd).started_at
-            self._session_logger.append_prompt(session_id, prompts, timestamp=started_at, cwd=cwd)
-        with self._lock:
-            self._pending[run_id] = PendingChatRun(
-                session_id=session_id,
-                cwd=cwd,
-                request_body=request_body,
-                model_name=self._model_name,
-            )
-
-    def on_llm_end(
-        self,
-        response: LLMResult,
-        *,
-        run_id: UUID,
-        **kwargs: Any,
-    ) -> Any:
-        pending = self._pop_pending(run_id)
-        if pending is None:
-            return
-        self._session_logger.log_api_pair(
-            session_id=pending.session_id,
-            source=self._source_name,
-            method="CHAT",
-            url=self._pseudo_url,
-            request_headers=None,
-            request_body=pending.request_body,
-            response_status=200,
-            response_headers=None,
-            response_body=to_serializable(response),
-            cwd=pending.cwd,
-            model_name=pending.model_name,
-        )
-
-    def on_llm_error(
-        self,
-        error: BaseException,
-        *,
-        run_id: UUID,
-        **kwargs: Any,
-    ) -> Any:
-        pending = self._pop_pending(run_id)
-        if pending is None:
-            return
-        self._session_logger.log_api_pair(
-            session_id=pending.session_id,
-            source=self._source_name,
-            method="CHAT",
-            url=self._pseudo_url,
-            request_headers=None,
-            request_body=pending.request_body,
-            response_status="error",
-            response_headers=None,
-            response_body={"error": str(error), "type": type(error).__name__},
-            cwd=pending.cwd,
-            model_name=pending.model_name,
-        )
-
-    @property
-    def _source_name(self) -> str:
-        if self._inner_provider:
-            return f"langchain:{self._inner_provider}"
-        return "langchain"
-
-    @property
-    def _pseudo_url(self) -> str:
-        if self._inner_provider:
-            return f"langchain://{self._inner_provider}/chat_model"
-        return "langchain://chat_model"
-
-    def _pop_pending(self, run_id: UUID) -> PendingChatRun | None:
-        with self._lock:
-            return self._pending.pop(run_id, None)
+_CALL_CONTEXT: ContextVar[dict[str, str] | None] = ContextVar(
+    "deepagents_logs_langchain_call_context",
+    default=None,
+)
 
 
 class LoggedLangChainModel(ProviderLoggingMixin, BaseChatModel):
     model: str = Field(...)
     model_provider: str | None = Field(default=None)
     profile: dict[str, Any] | None = Field(default=None)
+    disable_streaming: bool = Field(default=True)
 
     _session_logger: SessionArtifactLogger = PrivateAttr(default_factory=SessionArtifactLogger)
     _inner_model: BaseChatModel = PrivateAttr()
-    _logging_handler: LangChainLoggingCallback = PrivateAttr()
+    _bound_tools: Any = PrivateAttr(default=None)
+    _bound_tool_choice: str | None = PrivateAttr(default=None)
+    _bound_kwargs: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
         inner_model = self._create_inner_model()
-        self._logging_handler = LangChainLoggingCallback(
-            session_logger=self._session_logger,
-            session_id_getter=self._ensure_session_id,
-            cwd_getter=self._current_cwd,
-            model_name=self.inner_model_spec,
-            inner_provider=self.inner_provider,
-        )
-        self._attach_logging_handler(inner_model)
         self._inner_model = inner_model
         if self.profile is None:
             resolved_profile = getattr(inner_model, "profile", None)
@@ -203,7 +79,13 @@ class LoggedLangChainModel(ProviderLoggingMixin, BaseChatModel):
         tool_choice: str | None = None,
         **kwargs: Any,
     ) -> Any:
-        return self._inner_model.bind_tools(tools, tool_choice=tool_choice, **kwargs)
+        clone = self.model_copy(deep=False)
+        clone._session_logger = self._session_logger
+        clone._inner_model = self._inner_model
+        clone._bound_tools = tools
+        clone._bound_tool_choice = tool_choice
+        clone._bound_kwargs = dict(kwargs)
+        return clone
 
     def with_structured_output(
         self,
@@ -225,8 +107,25 @@ class LoggedLangChainModel(ProviderLoggingMixin, BaseChatModel):
         run_manager: Any = None,
         **kwargs: Any,
     ) -> ChatResult:
-        result = self._inner_model.generate([messages], stop=stop, **kwargs)
-        return _llm_result_to_chat_result(result)
+        with self._call_context():
+            request = self._request_body(messages, stop=stop, extra_kwargs=kwargs)
+            try:
+                if self._bound_tools is None:
+                    result = self._inner_model.generate([messages], stop=stop, **kwargs)
+                    chat_result = _llm_result_to_chat_result(result)
+                else:
+                    runnable = self._inner_model.bind_tools(
+                        self._bound_tools,
+                        tool_choice=self._bound_tool_choice,
+                        **self._bound_kwargs,
+                    )
+                    message = runnable.invoke(messages, stop=stop, **kwargs)
+                    chat_result = ChatResult(generations=[ChatGeneration(message=_ensure_ai_message(message))])
+                self._log_success(request, chat_result)
+                return chat_result
+            except Exception as exc:
+                self._log_error(request, exc)
+                raise
 
     async def _agenerate(
         self,
@@ -235,8 +134,13 @@ class LoggedLangChainModel(ProviderLoggingMixin, BaseChatModel):
         run_manager: Any = None,
         **kwargs: Any,
     ) -> ChatResult:
-        result = await self._inner_model.agenerate([messages], stop=stop, **kwargs)
-        return _llm_result_to_chat_result(result)
+        return await asyncio.to_thread(
+            self._generate,
+            messages,
+            stop,
+            run_manager,
+            **kwargs,
+        )
 
     def _stream(
         self,
@@ -245,8 +149,20 @@ class LoggedLangChainModel(ProviderLoggingMixin, BaseChatModel):
         run_manager: Any = None,
         **kwargs: Any,
     ):
-        for chunk in self._inner_model.stream(messages, stop=stop, **kwargs):
-            yield ChatGenerationChunk(message=chunk)
+        with self._call_context():
+            request = self._request_body(messages, stop=stop, extra_kwargs=kwargs)
+            chunks: list[ChatGenerationChunk] = []
+            try:
+                runnable = self._bound_runnable() if self._bound_tools is not None else self._inner_model
+                for chunk in runnable.stream(messages, stop=stop, **kwargs):
+                    generation_chunk = ChatGenerationChunk(message=_ensure_ai_message(chunk))
+                    chunks.append(generation_chunk)
+                    yield generation_chunk
+                merged = _merge_chunks_to_result(chunks)
+                self._log_success(request, merged)
+            except Exception as exc:
+                self._log_error(request, exc)
+                raise
 
     async def _astream(
         self,
@@ -255,23 +171,181 @@ class LoggedLangChainModel(ProviderLoggingMixin, BaseChatModel):
         run_manager: Any = None,
         **kwargs: Any,
     ):
-        async for chunk in self._inner_model.astream(messages, stop=stop, **kwargs):
-            yield ChatGenerationChunk(message=chunk)
+        result = await asyncio.to_thread(
+            self._generate,
+            messages,
+            stop,
+            run_manager,
+            **kwargs,
+        )
+        generations = result.generations or []
+        if not generations:
+            yield ChatGenerationChunk(message=AIMessageChunk(content=""))
+            return
+        for generation in generations:
+            yield ChatGenerationChunk(message=_ensure_ai_message_chunk(generation.message))
 
     def _create_inner_model(self) -> BaseChatModel:
         spec = self.inner_model_spec
         if spec.startswith(f"{LOGGED_LANGCHAIN_PROVIDER}:") or spec.startswith(f"{LOGGED_GIGACHAT_PROVIDER}:"):
             raise ValueError("Nested logged providers are not supported")
+        provider, separator, model_name = spec.partition(":")
+        if separator:
+            configured = self._create_from_custom_provider(provider, model_name)
+            if configured is not None:
+                return configured
+            if provider == "gigachat":
+                return self._create_builtin_gigachat_model(model_name)
         from deepagents_cli.config import create_model
 
         result = create_model(spec)
         return result.model
 
-    def _attach_logging_handler(self, inner_model: BaseChatModel) -> None:
-        callbacks = list(getattr(inner_model, "callbacks", []) or [])
-        if not any(callback is self._logging_handler for callback in callbacks):
-            callbacks.append(self._logging_handler)
-            inner_model.callbacks = callbacks
+    def _create_from_custom_provider(self, provider: str, model_name: str) -> BaseChatModel | None:
+        from deepagents_cli.model_config import ModelConfig
+
+        config = ModelConfig.load()
+        class_path = config.get_class_path(provider)
+        if not class_path:
+            return None
+        kwargs = config.get_kwargs(provider, model_name=model_name)
+        model = _instantiate_class_path(class_path, model_name=model_name, kwargs=kwargs)
+        profile = getattr(model, "profile", None)
+        overrides = config.get_profile_overrides(provider, model_name=model_name)
+        if overrides and isinstance(profile, dict):
+            model.profile = {**profile, **overrides}
+        elif overrides:
+            model.profile = dict(overrides)
+        return model
+
+    def _create_builtin_gigachat_model(self, model_name: str) -> BaseChatModel:
+        module = importlib.import_module("langchain_gigachat.chat_models")
+        cls = getattr(module, "GigaChat")
+        kwargs = _load_gigachat_kwargs()
+        kwargs["model"] = model_name
+        return cls(**kwargs)
+
+    def _bound_runnable(self):
+        return self._inner_model.bind_tools(
+            self._bound_tools,
+            tool_choice=self._bound_tool_choice,
+            **self._bound_kwargs,
+        )
+
+    def _current_session_id(self) -> str | None:
+        context = _CALL_CONTEXT.get()
+        if context and context.get("session_id"):
+            return context["session_id"]
+        return self._ensure_session_id()
+
+    def _current_call_cwd(self) -> str:
+        context = _CALL_CONTEXT.get()
+        if context and context.get("cwd"):
+            return context["cwd"]
+        return self._current_cwd()
+
+    def _call_context(self):
+        wrapper = self
+
+        class _CallContext:
+            def __enter__(self_inner):
+                token = _CALL_CONTEXT.set(
+                    {
+                        "session_id": wrapper._ensure_session_id() or "",
+                        "cwd": wrapper._current_cwd(),
+                    }
+                )
+                self_inner._token = token
+                return None
+
+            def __exit__(self_inner, exc_type, exc, tb):
+                _CALL_CONTEXT.reset(self_inner._token)
+                return False
+
+        return _CallContext()
+
+    def _request_body(
+        self,
+        messages: list[BaseMessage],
+        *,
+        stop: list[str] | None,
+        extra_kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        prompts = _extract_prompt_texts([messages])
+        if prompts:
+            started_at = self._session_logger.ensure_state(
+                self._current_session_id() or "unknown",
+                self._current_call_cwd(),
+            ).started_at
+            session_id = self._current_session_id()
+            if session_id:
+                self._session_logger.append_prompt(
+                    session_id,
+                    prompts,
+                    timestamp=started_at,
+                    cwd=self._current_call_cwd(),
+                )
+        return {
+            "messages": to_serializable([messages]),
+            "stop": stop,
+            "kwargs": to_serializable(extra_kwargs),
+            "model": self.inner_model_spec,
+            "provider": self.inner_provider,
+            "bound_tools": self._bound_tool_descriptors(),
+            "tool_choice": self._bound_tool_choice,
+            "bound_kwargs": to_serializable(self._bound_kwargs),
+        }
+
+    def _log_success(self, request_body: dict[str, Any], result: ChatResult) -> None:
+        session_id = self._current_session_id()
+        if not session_id:
+            return
+        self._session_logger.log_api_pair(
+            session_id=session_id,
+            source=f"langchain:{self.inner_provider}" if self.inner_provider else "langchain",
+            method="CHAT",
+            url=f"langchain://{self.inner_provider}/chat_model" if self.inner_provider else "langchain://chat_model",
+            request_headers=None,
+            request_body=request_body,
+            response_status=200,
+            response_headers=None,
+            response_body=result,
+            cwd=self._current_call_cwd(),
+            model_name=self.inner_model_spec,
+        )
+
+    def _log_error(self, request_body: dict[str, Any], error: BaseException) -> None:
+        session_id = self._current_session_id()
+        if not session_id:
+            return
+        self._session_logger.log_api_pair(
+            session_id=session_id,
+            source=f"langchain:{self.inner_provider}" if self.inner_provider else "langchain",
+            method="CHAT",
+            url=f"langchain://{self.inner_provider}/chat_model" if self.inner_provider else "langchain://chat_model",
+            request_headers=None,
+            request_body=request_body,
+            response_status="error",
+            response_headers=None,
+            response_body={"error": str(error), "type": type(error).__name__},
+            cwd=self._current_call_cwd(),
+            model_name=self.inner_model_spec,
+        )
+
+    def _bound_tool_descriptors(self) -> list[dict[str, Any]] | None:
+        if not self._bound_tools:
+            return None
+        tools = self._bound_tools
+        if not isinstance(tools, (list, tuple)):
+            tools = [tools]
+        descriptors: list[dict[str, Any]] = []
+        for tool in tools:
+            name = getattr(tool, "name", None) or getattr(tool, "__name__", None) or type(tool).__name__
+            descriptors.append({
+                "name": str(name),
+                "type": type(tool).__name__,
+            })
+        return descriptors
 
 
 def _extract_prompt_texts(message_batches: list[list[BaseMessage]]) -> list[str]:
@@ -307,3 +381,131 @@ def _message_text(message: BaseMessage) -> str:
 def _llm_result_to_chat_result(result: LLMResult) -> ChatResult:
     generations = result.generations[0] if result.generations else []
     return ChatResult(generations=generations, llm_output=result.llm_output)
+
+
+def _instantiate_class_path(class_path: str, *, model_name: str, kwargs: dict[str, Any]) -> BaseChatModel:
+    if ":" not in class_path:
+        raise ValueError(f"Invalid class_path: {class_path}")
+    module_path, class_name = class_path.rsplit(":", 1)
+    module = importlib.import_module(module_path)
+    cls = getattr(module, class_name)
+    if not isinstance(cls, type) or not issubclass(cls, BaseChatModel):
+        raise TypeError(f"{class_path} is not a BaseChatModel subclass")
+    return cls(model=model_name, **kwargs)
+
+
+def _ensure_ai_message(message: Any) -> AIMessage:
+    if isinstance(message, AIMessage):
+        return message
+    content = getattr(message, "content", message)
+    additional_kwargs = getattr(message, "additional_kwargs", {})
+    response_metadata = getattr(message, "response_metadata", {})
+    return AIMessage(
+        content=content,
+        additional_kwargs=additional_kwargs,
+        response_metadata=response_metadata,
+    )
+
+
+def _ensure_ai_message_chunk(message: Any) -> AIMessageChunk:
+    if isinstance(message, AIMessageChunk):
+        return message
+    if isinstance(message, BaseMessageChunk):
+        return AIMessageChunk(
+            content=getattr(message, "content", ""),
+            additional_kwargs=getattr(message, "additional_kwargs", {}) or {},
+            response_metadata=getattr(message, "response_metadata", {}) or {},
+            id=getattr(message, "id", None),
+        )
+    ai_message = _ensure_ai_message(message)
+    return AIMessageChunk(
+        content=ai_message.content,
+        additional_kwargs=ai_message.additional_kwargs,
+        response_metadata=ai_message.response_metadata,
+        id=ai_message.id,
+    )
+
+
+def _merge_chunks_to_result(chunks: list[ChatGenerationChunk]) -> ChatResult:
+    if not chunks:
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=""))])
+    content_parts: list[str] = []
+    additional_kwargs: dict[str, Any] = {}
+    response_metadata: dict[str, Any] = {}
+    for chunk in chunks:
+        message = chunk.message
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            content_parts.append(content)
+        additional_kwargs.update(getattr(message, "additional_kwargs", {}) or {})
+        response_metadata.update(getattr(message, "response_metadata", {}) or {})
+    return ChatResult(
+        generations=[
+            ChatGeneration(
+                message=AIMessage(
+                    content="".join(content_parts),
+                    additional_kwargs=additional_kwargs,
+                    response_metadata=response_metadata,
+                )
+            )
+        ]
+    )
+
+
+def _load_gigachat_kwargs() -> dict[str, Any]:
+    env = parse_env_file(DEEPAGENTS_ENV_PATH)
+    merged = {**env, **{k: v for k, v in os.environ.items() if k.startswith("GIGACHAT_")}}
+    kwargs: dict[str, Any] = {}
+    string_keys = {
+        "GIGACHAT_BASE_URL": "base_url",
+        "GIGACHAT_AUTH_URL": "auth_url",
+        "GIGACHAT_CREDENTIALS": "credentials",
+        "GIGACHAT_SCOPE": "scope",
+        "GIGACHAT_ACCESS_TOKEN": "access_token",
+        "GIGACHAT_USER": "user",
+        "GIGACHAT_PASSWORD": "password",
+        "GIGACHAT_CA_BUNDLE_FILE": "ca_bundle_file",
+        "GIGACHAT_CERT_FILE": "cert_file",
+        "GIGACHAT_KEY_FILE": "key_file",
+        "GIGACHAT_KEY_FILE_PASSWORD": "key_file_password",
+    }
+    for env_key, kwarg in string_keys.items():
+        value = str(merged.get(env_key, "")).strip()
+        if value:
+            kwargs[kwarg] = value
+    float_keys = {
+        "GIGACHAT_TIMEOUT": "timeout",
+        "GIGACHAT_RETRY_BACKOFF_FACTOR": "retry_backoff_factor",
+    }
+    for env_key, kwarg in float_keys.items():
+        value = str(merged.get(env_key, "")).strip()
+        if value:
+            try:
+                kwargs[kwarg] = float(value)
+            except ValueError:
+                pass
+    int_keys = {
+        "GIGACHAT_MAX_CONNECTIONS": "max_connections",
+        "GIGACHAT_MAX_RETRIES": "max_retries",
+    }
+    for env_key, kwarg in int_keys.items():
+        value = str(merged.get(env_key, "")).strip()
+        if value:
+            try:
+                kwargs[kwarg] = int(value)
+            except ValueError:
+                pass
+    bool_keys = {
+        "GIGACHAT_VERIFY_SSL_CERTS": "verify_ssl_certs",
+        "GIGACHAT_PROFANITY_CHECK": "profanity_check",
+    }
+    for env_key, kwarg in bool_keys.items():
+        value = str(merged.get(env_key, "")).strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            kwargs[kwarg] = True
+        elif value in {"0", "false", "no", "off"}:
+            kwargs[kwarg] = False
+    flags = str(merged.get("GIGACHAT_FLAGS", "")).strip()
+    if flags:
+        kwargs["flags"] = [flag.strip() for flag in flags.split(",") if flag.strip()]
+    return kwargs
