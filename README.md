@@ -18,6 +18,7 @@ The logging core:
 - hooks into Deep Agents session lifecycle via `~/.deepagents/hooks.json`
 - writes local session exports with a layout close to existing S3 LLM logs
 - optionally mirrors those exports to S3-compatible storage
+- captures lifecycle metadata for any Deep Agents model/provider configuration
 
 The optional GigaChat setup:
 
@@ -25,6 +26,13 @@ The optional GigaChat setup:
 - can set `gigachat_logged:GigaChat-2-Max` as the Deep Agents default model
 - preserves your existing `~/.deepagents/.env` values
 - logs GigaChat request/response pairs alongside the Deep Agents session export
+
+Important: full request/response logging currently requires a logged provider
+adapter. If Deep Agents is configured to use the regular `gigachat` provider
+directly, `deepagents-logs` will still upload session metadata and hook events,
+but it will not see the actual LLM request/response payloads. For full GigaChat
+payload logs, configure Deep Agents to use `gigachat_logged` through this
+package.
 
 ## Key layout
 
@@ -71,6 +79,21 @@ Why `--package-spec` is needed: the setup command installs `deepagents-cli` as a
 separate `uv tool` environment and must also install `deepagents-logs` into that
 Deep Agents environment so hooks and provider imports work at runtime.
 
+If you already had GigaChat configured manually, still run the `--provider
+gigachat` setup above for full payload logging. It preserves `~/.deepagents/.env`
+credentials, installs `gigachat_logged`, and switches the default model to:
+
+```toml
+[models]
+default = "gigachat_logged:GigaChat-2-Max"
+
+[models.providers.gigachat_logged]
+class_path = "deepagents_logs.providers.gigachat:LoggedGigaChat"
+```
+
+If the default remains `gigachat:GigaChat-2-Max` or another non-logged provider,
+only metadata logs are expected.
+
 ## Run Deep Agents normally
 
 After setup, use Deep Agents CLI the usual way. `deepagents-logs` stays in the
@@ -86,6 +109,13 @@ deepagents -n "Reply with exactly: OK" -q --no-stream
 
 Logs are written locally under `~/.deepagents/log-export/` and, if S3 is enabled,
 mirrored to the configured bucket/prefix.
+
+Expected files:
+
+- With hooks only / non-logged provider: `hook-events.jsonl`, `session-meta.json`
+  and sometimes `README.md`.
+- With `gigachat_logged`: the same metadata files plus `*_request.json` and
+  `*_response.json` provider payload logs.
 
 ## Setup examples
 
