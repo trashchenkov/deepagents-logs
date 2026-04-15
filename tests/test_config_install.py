@@ -41,6 +41,19 @@ class ConfigInstallTests(unittest.TestCase):
         config.unlink()
         tmp_path.rmdir()
 
+    def test_logged_provider_detects_normalized_deepagents_config(self):
+        tmp_path = Path(self.id().replace(".", "_"))
+        tmp_path.mkdir(exist_ok=True)
+        config = tmp_path / "config.toml"
+        config.write_text(
+            '[models.providers.gigachat_logged]\n'
+            'class_path = "deepagents_logs.providers.gigachat:LoggedGigaChat"\n'
+            'enabled = true\n'
+        )
+        self.assertTrue(logged_provider_installed(config))
+        config.unlink()
+        tmp_path.rmdir()
+
 
 class CliStatusTests(unittest.TestCase):
     def test_gigachat_env_status_redacts_secrets_but_shows_safe_values(self):

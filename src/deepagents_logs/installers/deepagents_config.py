@@ -79,8 +79,7 @@ def logged_provider_installed(path: Path = DEEPAGENTS_CONFIG_PATH) -> bool:
         return False
     text = path.read_text()
     return (
-        MANAGED_BLOCK_START in text
-        and MANAGED_BLOCK_END in text
+        f"[models.providers.{LOGGED_GIGACHAT_PROVIDER}]" in text
         and "deepagents_logs.providers.gigachat:LoggedGigaChat" in text
     )
 
